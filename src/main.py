@@ -109,15 +109,44 @@ def get_solidity_files_from_foundry():
         logging.error(f"Erreur lors de la lecture de foundry.toml : {e}")
         return []
 
-def main(sol_file, framework_arg):
+def install_solidity_imports(sol_file):
+    """Installe les imports dans les fichiers Solidity si nécessaire, pour Foundry."""
+    try:
+        # Lire le contenu du fichier Solidity pour extraire les imports
+        with open(sol_file, "r") as f:
+            content = f.read()
+        
+        # Trouver les imports Solidity dans le fichier
+        imports = re.findall(r'import\s+"([^"]+)";', content)
+        
+        if imports:
+            logging.info(f"Imports trouvés dans {sol_file} : {', '.join(imports)}")
+            
+            # Pour chaque import trouvé, vérifier s'il est disponible et installer via Foundry
+            for imp in imports:
+                # Par exemple, télécharger et installer via forge si nécessaire
+                if not os.path.isdir(os.path.join("lib", imp)):  # Vérifie si le répertoire existe déjà
+                    logging.info(f"Installation de l'import {imp}...")
+                    subprocess.run(["forge", "install", imp], check=True)
+                else:
+                    logging.info(f"L'import {imp} est déjà installé.")
+        else:
+            logging.info(f"Aucun import trouvé dans {sol_file}.")
+    except Exception as e:
+        logging.error(f"Erreur lors de l'installation des imports pour {sol_file} : {e}")
+
+def main(sol_file, framework_arg=None):
     # Affiche le répertoire de travail actuel
     current_directory = os.getcwd()
     logging.info(f"Le script est exécuté dans le répertoire : {current_directory}")
+    
+    detected_frameworks = []
     
     if framework_arg:
         # Si un framework spécifique est demandé
         if is_in_framework(framework_arg):
             logging.info(f"Environnement {framework_arg} détecté.")
+            detected_frameworks = [framework_arg]  # Ajout explicite pour gérer la logique
         else:
             logging.error(f"Erreur : environnement {framework_arg} non détecté.")
             return
@@ -129,10 +158,12 @@ def main(sol_file, framework_arg):
         else:
             logging.warning("Aucun environnement de framework spécifique détecté.")
     
-    if framework_arg == "foundry":
-        # Si Foundry est détecté et qu'un fichier est spécifié
+    # Installer les imports pour tous les fichiers Solidity détectés dans Foundry
+    if "foundry" in detected_frameworks or framework_arg == "foundry":
         if sol_file:
             if os.path.isfile(sol_file):
+                install_solidity_imports(sol_file)
+                
                 version = get_solidity_version(sol_file)
                 if version:
                     logging.info(f"Version de Solidity pour {sol_file} : {version}")
@@ -155,6 +186,8 @@ def main(sol_file, framework_arg):
             if sol_files:
                 logging.info(f"Fichiers Solidity trouvés dans Foundry : {', '.join(sol_files)}")
                 for sol_file in sol_files:
+                    install_solidity_imports(sol_file)
+                    
                     version = get_solidity_version(sol_file)
                     if version:
                         logging.info(f"Version de Solidity pour {sol_file} : {version}")
@@ -189,6 +222,7 @@ def main(sol_file, framework_arg):
         logging.debug(json.dumps(ast, indent=4))  # Utilise debug pour afficher l'AST en détails
     else:
         logging.error("Erreur : échec de la génération de l'AST.")
+
 
 if __name__ == "__main__":
     args = parser.parse_args()
