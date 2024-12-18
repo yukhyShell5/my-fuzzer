@@ -1,7 +1,11 @@
 # my-fuzzer
-fuzzer pour les smart contract solidity
+fuzzer pour les smart contract solidity a base de l'[ast](https://en.wikipedia.org/wiki/Abstract_syntax_tree)
 
-## Introduction
+## Fonctionnalités
+- Vérification de l'installation de solc et installation automatique via solc-select.
+- Détection des environnements Foundry et Hardhat.
+- Génération de l'AST d'un fichier Solidity spécifique ou de tous les fichiers Solidity dans un projet Foundry.
+- Sélection automatique de la version de Solidity basée sur les fichiers Solidity.
 
 ## 📁 File Structure
 ```bash
@@ -24,3 +28,6 @@ fuzzer pour les smart contract solidity
         └── test
             └── Counter.t.sol
 ```
+
+## 🔒 License
+Ce projet est sous licence [GNU General Public License v3.0](https://choosealicense.com/licenses/gpl-3.0/).
