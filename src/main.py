@@ -3,109 +3,193 @@ import json
 import re
 import subprocess
 import argparse
+import logging
+import coloredlogs
+import toml
 
-# Configuration des arguments
+# Configuration de logging avec couleurs
+coloredlogs.install(level='INFO', fmt='%(asctime)s - %(levelname)s - %(message)s')
+
 parser = argparse.ArgumentParser()
-parser.add_argument("file", type=str, help="Chemin vers le fichier Solidity.")
+parser.add_argument("--file", type=str, help="Chemin vers le fichier Solidity.")
+parser.add_argument("--framework", type=str, choices=["foundry", "hardhat"], help="Spécifie le framework utilisé (foundry ou hardhat).")
+
+def is_solc_installed():
+    try:
+        subprocess.run(["solc", "--version"], capture_output=True, text=True, check=True)
+        return True
+    except FileNotFoundError:
+        logging.warning("solc n'est pas installé. Tentative d'installation de solc-select via pip...")
+        try:
+            subprocess.run(["pip", "install", "solc-select"], check=True)
+            logging.info("solc-select installé avec succès.")
+            try:
+                subprocess.run(["solc-select", "install", "all"], check=True)
+                logging.info("Toutes les versions disponibles de solc ont été installées avec solc-select.")
+                return True
+            except subprocess.CalledProcessError:
+                logging.error("Erreur : impossible d'installer les versions de solc avec solc-select.")
+                return False
+        except subprocess.CalledProcessError:
+            logging.error("Erreur : impossible d'installer solc-select avec pip.")
+            return False
+    except subprocess.CalledProcessError:
+        return False
+
+def is_in_framework(specific_framework=None):
+    """Vérifie si le script est exécuté dans un environnement Foundry ou Hardhat."""
+    frameworks = {
+        "foundry": "foundry.toml",
+        "hardhat": ["hardhat.config.js", "hardhat.config.ts"]
+    }
+
+    if specific_framework:
+        config_files = frameworks.get(specific_framework)
+        if not config_files:
+            return False
+        if isinstance(config_files, list):
+            return any(os.path.isfile(file) for file in config_files)
+        return os.path.isfile(config_files)
+
+    # Si aucun framework spécifique n'est demandé, chercher tous les frameworks possibles.
+    detected_frameworks = [
+        framework for framework, config_files in frameworks.items()
+        if any(os.path.isfile(file) for file in (config_files if isinstance(config_files, list) else [config_files]))
+    ]
+    return detected_frameworks
 
 def get_solidity_version(sol_file):
-    """
-    Extrait la version de Solidity à partir de la directive 'pragma solidity'.
-
-    Args:
-        sol_file (str): Chemin vers le fichier Solidity.
-
-    Returns:
-        str: Version de Solidity (ex: '0.8.13').
-    """
     try:
         with open(sol_file, "r") as f:
             content = f.read()
-        
-        # Expression régulière pour trouver la version dans pragma solidity
         match = re.search(r'pragma solidity [\^~]*([\d.]+);', content)
         if match:
             return match.group(1)
-        else:
-            print("Aucune directive 'pragma solidity' trouvée dans le fichier.")
-            return None
+        return None
     except Exception as e:
-        print(f"Erreur lors de la lecture du fichier : {e}")
+        logging.error(f"Erreur lors de la lecture du fichier Solidity : {e}")
         return None
 
 def select_solc_version(version):
-    """
-    Sélectionne la version de Solidity via solc-select.
-
-    Args:
-        version (str): Version de Solidity (ex: '0.8.13').
-
-    Returns:
-        bool: True si la version a été sélectionnée avec succès, sinon False.
-    """
     try:
         subprocess.run(["solc-select", "use", version], check=True, capture_output=True, text=True)
-        print(f"Version Solidity {version} sélectionnée avec succès.")
         return True
-    except subprocess.CalledProcessError as e:
-        print(f"Erreur : impossible de sélectionner la version {version}.")
-        print(e.stderr)
+    except subprocess.CalledProcessError:
+        logging.error(f"Erreur : impossible de sélectionner la version {version}.")
         return False
 
 def generate_ast(sol_file):
-    """
-    Génère l'AST compact JSON d'un fichier Solidity à l'aide de solc.
-
-    Args:
-        sol_file (str): Chemin vers le fichier Solidity.
-
-    Returns:
-        dict: AST sous forme de dictionnaire JSON.
-    """
     try:
-        # Exécution de la commande solc pour l'AST
-        result = subprocess.run(["solc", "--ast-compact-json", sol_file],
-                                capture_output=True, text=True, check=True)
-
-        # Extraction du JSON avec une regex
+        result = subprocess.run(["solc", "--ast-compact-json", sol_file], capture_output=True, text=True, check=True)
         json_match = re.search(r'\{.*\}', result.stdout, re.DOTALL)
         if json_match:
             return json.loads(json_match.group(0))
-        else:
-            print("Erreur : JSON non trouvé dans la sortie de solc.")
-            return None
-    except subprocess.CalledProcessError as e:
-        print("Erreur avec solc :")
-        print(e.stderr)
         return None
-    except json.JSONDecodeError as e:
-        print("Erreur de décodage JSON :", e)
+    except (subprocess.CalledProcessError, json.JSONDecodeError):
+        logging.error("Erreur : échec de la génération de l'AST.")
         return None
 
-def main(sol_file):
-    """
-    Fonction principale : détecte la version, sélectionne solc et génère l'AST.
-    """
-    # Étape 1 : Extraire la version
+def get_solidity_files_from_foundry():
+    try:
+        # Charger le fichier foundry.toml
+        with open("foundry.toml", "r") as f:
+            config = toml.load(f)
+        
+        # Lire le chemin du répertoire source dans la configuration
+        src_directory = config.get("profile", {}).get("default", {}).get("src", "")
+        
+        if src_directory and os.path.isdir(src_directory):
+            # Lire tous les fichiers Solidity dans le répertoire
+            sol_files = [os.path.join(src_directory, f) for f in os.listdir(src_directory) if f.endswith(".sol")]
+            return sol_files
+        else:
+            logging.error("Répertoire source non spécifié ou invalide dans foundry.toml.")
+            return []
+    except (FileNotFoundError, toml.TomlDecodeError) as e:
+        logging.error(f"Erreur lors de la lecture de foundry.toml : {e}")
+        return []
+
+def main(sol_file, framework_arg):
+    # Affiche le répertoire de travail actuel
+    current_directory = os.getcwd()
+    logging.info(f"Le script est exécuté dans le répertoire : {current_directory}")
+    
+    if framework_arg:
+        # Si un framework spécifique est demandé
+        if is_in_framework(framework_arg):
+            logging.info(f"Environnement {framework_arg} détecté.")
+        else:
+            logging.error(f"Erreur : environnement {framework_arg} non détecté.")
+            return
+    else:
+        # Sinon, détecter tous les frameworks
+        detected_frameworks = is_in_framework()
+        if detected_frameworks:
+            logging.info(f"Environnements détectés : {', '.join(detected_frameworks)}.")
+        else:
+            logging.warning("Aucun environnement de framework spécifique détecté.")
+    
+    if framework_arg == "foundry":
+        # Si Foundry est détecté et qu'un fichier est spécifié
+        if sol_file:
+            if os.path.isfile(sol_file):
+                version = get_solidity_version(sol_file)
+                if version:
+                    logging.info(f"Version de Solidity pour {sol_file} : {version}")
+                    if select_solc_version(version):
+                        ast = generate_ast(sol_file)
+                        if ast:
+                            logging.info(f"AST générée pour {sol_file} avec succès.")
+                            logging.debug(json.dumps(ast, indent=4))  # Utilise debug pour afficher l'AST en détails
+                        else:
+                            logging.error(f"Erreur : échec de la génération de l'AST pour {sol_file}.")
+                    else:
+                        logging.error(f"Erreur : impossible de sélectionner la version {version}.")
+                else:
+                    logging.error(f"Erreur : impossible de détecter la version de Solidity pour {sol_file}.")
+            else:
+                logging.error(f"Le fichier spécifié {sol_file} n'a pas été trouvé dans le répertoire Foundry.")
+        else:
+            # Sinon, générer l'AST pour tous les fichiers Solidity trouvés dans Foundry
+            sol_files = get_solidity_files_from_foundry()
+            if sol_files:
+                logging.info(f"Fichiers Solidity trouvés dans Foundry : {', '.join(sol_files)}")
+                for sol_file in sol_files:
+                    version = get_solidity_version(sol_file)
+                    if version:
+                        logging.info(f"Version de Solidity pour {sol_file} : {version}")
+                        if select_solc_version(version):
+                            ast = generate_ast(sol_file)
+                            if ast:
+                                logging.info(f"AST générée pour {sol_file} avec succès.")
+                                logging.debug(json.dumps(ast, indent=4))  # Utilise debug pour afficher l'AST en détails
+                            else:
+                                logging.error(f"Erreur : échec de la génération de l'AST pour {sol_file}.")
+                        else:
+                            logging.error(f"Erreur : impossible de sélectionner la version {version}.")
+                    else:
+                        logging.error(f"Erreur : impossible de détecter la version de Solidity pour {sol_file}.")
+            else:
+                logging.error("Aucun fichier Solidity trouvé dans Foundry.")
+        return
+    
+    if not is_solc_installed():
+        logging.error("Erreur : solc n'a pas pu être installé.")
+        return
     version = get_solidity_version(sol_file)
     if not version:
-        print("Impossible de continuer sans version Solidity.")
+        logging.error("Erreur : impossible de détecter la version de Solidity.")
         return
-
-    # Étape 2 : Sélectionner la version via solc-select
     if not select_solc_version(version):
-        print("La sélection de la version Solidity a échoué.")
+        logging.error(f"Erreur : impossible de sélectionner la version {version}.")
         return
-
-    # Étape 3 : Générer l'AST
     ast = generate_ast(sol_file)
     if ast:
-        print("AST JSON généré avec succès :")
-        print(json.dumps(ast, indent=4))
+        logging.info("AST générée avec succès.")
+        logging.debug(json.dumps(ast, indent=4))  # Utilise debug pour afficher l'AST en détails
     else:
-        print("Échec de la génération de l'AST.")
+        logging.error("Erreur : échec de la génération de l'AST.")
 
-# Lancer le script
 if __name__ == "__main__":
     args = parser.parse_args()
-    main(args.file)
+    main(args.file, args.framework)
