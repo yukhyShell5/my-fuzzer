@@ -12,6 +12,7 @@ coloredlogs.install(level='INFO', fmt='%(asctime)s - %(levelname)s - %(message)s
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--file", type=str, help="Chemin vers le fichier Solidity.")
+parser.add_argument("--lib", type=str, help="Spécifie une bibliothèque à installer pour les imports.")
 parser.add_argument("--framework", type=str, choices=["foundry", "hardhat"], help="Spécifie le framework utilisé (foundry ou hardhat).")
 
 def is_solc_installed():
@@ -109,7 +110,7 @@ def get_solidity_files_from_foundry():
         logging.error(f"Erreur lors de la lecture de foundry.toml : {e}")
         return []
 
-def install_solidity_imports(sol_file):
+def install_solidity_imports(sol_file, extra_lib=None):
     """Installe les imports dans les fichiers Solidity si nécessaire, pour Foundry."""
     try:
         # Lire le contenu du fichier Solidity pour extraire les imports
@@ -124,18 +125,83 @@ def install_solidity_imports(sol_file):
             
             # Pour chaque import trouvé, vérifier s'il est disponible et installer via Foundry
             for imp in imports:
-                # Par exemple, télécharger et installer via forge si nécessaire
-                if not os.path.isdir(os.path.join("lib", imp)):  # Vérifie si le répertoire existe déjà
+                # Vérifie si le répertoire de l'import existe déjà
+                if not os.path.isdir(os.path.join("lib", imp)):
                     logging.info(f"Installation de l'import {imp}...")
                     subprocess.run(["forge", "install", imp], check=True)
                 else:
                     logging.info(f"L'import {imp} est déjà installé.")
         else:
             logging.info(f"Aucun import trouvé dans {sol_file}.")
+        
+        # Installer une bibliothèque supplémentaire si spécifiée
+        if extra_lib:
+            logging.info(f"Installation de la bibliothèque supplémentaire : {extra_lib}...")
+            subprocess.run(["forge", "install", extra_lib], check=True)
+        
     except Exception as e:
         logging.error(f"Erreur lors de l'installation des imports pour {sol_file} : {e}")
 
-def main(sol_file, framework_arg=None):
+def extract_functions_recursively(nodes):
+    """Récupère toutes les fonctions publiques ou externes dans l'AST."""
+    functions = []
+    for node in nodes:
+        if node.get("nodeType") == "FunctionDefinition":
+            visibility = node.get("visibility", "internal")
+            function_name = node.get("name")
+            if function_name and visibility in ["public", "external"]:
+                functions.append(function_name)
+        # Si le nœud contient des enfants, les parcourir récursivement
+        if "nodes" in node:
+            functions.extend(extract_functions_recursively(node["nodes"]))
+    return functions
+
+def generate_fuzzing_test(ast, contract_name="FuzzContract"):
+    """Génère un fichier de test avec des appels pour fuzz les fonctions repérées dans l'AST."""
+    # Extraire les fonctions publiques et externes
+    functions = extract_functions_recursively(ast.get("nodes", []))
+    
+    if not functions:
+        logging.warning("Aucune fonction publique ou externe trouvée dans l'AST.")
+    
+    # Générer le contenu du fichier de test
+    test_content = f"""
+    // SPDX-License-Identifier: MIT
+    pragma solidity ^0.8.0;
+
+    import "forge-std/Test.sol";
+
+    contract {contract_name} is Test {{
+    """
+    for func in functions:
+        test_content += f"""
+        function test_{func}() public {{
+            // Fuzzer appelle {func}
+            vm.prank(address(0x1));
+            try this.{func}() {{
+                assertTrue(true);
+            }} catch {{
+                assertTrue(false);
+            }}
+        }}
+        """
+    
+    test_content += """
+    }
+    """
+
+    # Construire le chemin de sauvegarde
+    test_directory = os.path.join(os.getcwd(), 'test')
+    os.makedirs(test_directory, exist_ok=True)
+    test_file_path = os.path.join(test_directory, f"{contract_name}.sol")
+
+    # Sauvegarder le fichier de test
+    with open(test_file_path, "w") as f:
+        f.write(test_content)
+    
+    logging.info(f"Fichier de test généré avec succès : {test_file_path}")
+
+def main(sol_file, framework_arg=None, extra_lib=None):
     # Affiche le répertoire de travail actuel
     current_directory = os.getcwd()
     logging.info(f"Le script est exécuté dans le répertoire : {current_directory}")
@@ -146,23 +212,25 @@ def main(sol_file, framework_arg=None):
         # Si un framework spécifique est demandé
         if is_in_framework(framework_arg):
             logging.info(f"Environnement {framework_arg} détecté.")
-            detected_frameworks = [framework_arg]  # Ajout explicite pour gérer la logique
+            detected_frameworks = [framework_arg]
         else:
             logging.error(f"Erreur : environnement {framework_arg} non détecté.")
             return
     else:
-        # Sinon, détecter tous les frameworks
+        # Sinon, détecter tous les frameworks possibles
         detected_frameworks = is_in_framework()
         if detected_frameworks:
             logging.info(f"Environnements détectés : {', '.join(detected_frameworks)}.")
         else:
             logging.warning("Aucun environnement de framework spécifique détecté.")
     
-    # Installer les imports pour tous les fichiers Solidity détectés dans Foundry
+    # Si l'environnement Foundry est détecté ou spécifié
     if "foundry" in detected_frameworks or framework_arg == "foundry":
         if sol_file:
+            # Vérifie si le fichier Solidity existe
             if os.path.isfile(sol_file):
-                install_solidity_imports(sol_file)
+                # Installation des imports avec la bibliothèque supplémentaire
+                install_solidity_imports(sol_file, extra_lib)
                 
                 version = get_solidity_version(sol_file)
                 if version:
@@ -171,7 +239,10 @@ def main(sol_file, framework_arg=None):
                         ast = generate_ast(sol_file)
                         if ast:
                             logging.info(f"AST générée pour {sol_file} avec succès.")
-                            logging.debug(json.dumps(ast, indent=4))  # Utilise debug pour afficher l'AST en détails
+                            logging.debug(json.dumps(ast, indent=4))  # Détail de l'AST en debug
+                            
+                            # Génération du fichier de test
+                            generate_fuzzing_test(ast, "FuzzContract")
                         else:
                             logging.error(f"Erreur : échec de la génération de l'AST pour {sol_file}.")
                     else:
@@ -181,12 +252,12 @@ def main(sol_file, framework_arg=None):
             else:
                 logging.error(f"Le fichier spécifié {sol_file} n'a pas été trouvé dans le répertoire Foundry.")
         else:
-            # Sinon, générer l'AST pour tous les fichiers Solidity trouvés dans Foundry
+            # Si aucun fichier n'est spécifié, traite tous les fichiers Solidity dans Foundry
             sol_files = get_solidity_files_from_foundry()
             if sol_files:
                 logging.info(f"Fichiers Solidity trouvés dans Foundry : {', '.join(sol_files)}")
                 for sol_file in sol_files:
-                    install_solidity_imports(sol_file)
+                    install_solidity_imports(sol_file, extra_lib)
                     
                     version = get_solidity_version(sol_file)
                     if version:
@@ -195,7 +266,10 @@ def main(sol_file, framework_arg=None):
                             ast = generate_ast(sol_file)
                             if ast:
                                 logging.info(f"AST générée pour {sol_file} avec succès.")
-                                logging.debug(json.dumps(ast, indent=4))  # Utilise debug pour afficher l'AST en détails
+                                logging.debug(json.dumps(ast, indent=4))  # Détail de l'AST en debug
+                                
+                                # Génération du fichier de test
+                                generate_fuzzing_test(ast, "FuzzContract")
                             else:
                                 logging.error(f"Erreur : échec de la génération de l'AST pour {sol_file}.")
                         else:
@@ -206,24 +280,34 @@ def main(sol_file, framework_arg=None):
                 logging.error("Aucun fichier Solidity trouvé dans Foundry.")
         return
     
+    # Si Foundry n'est pas utilisé, vérifier si solc est installé
     if not is_solc_installed():
         logging.error("Erreur : solc n'a pas pu être installé.")
         return
+    
+    # Obtenir la version de Solidity pour le fichier spécifié
     version = get_solidity_version(sol_file)
     if not version:
         logging.error("Erreur : impossible de détecter la version de Solidity.")
         return
+    
+    # Sélectionner la version correcte de solc
     if not select_solc_version(version):
         logging.error(f"Erreur : impossible de sélectionner la version {version}.")
         return
+    
+    # Générer l'AST pour le fichier spécifié
     ast = generate_ast(sol_file)
     if ast:
         logging.info("AST générée avec succès.")
-        logging.debug(json.dumps(ast, indent=4))  # Utilise debug pour afficher l'AST en détails
+        logging.debug(json.dumps(ast, indent=4))  # Détail de l'AST en debug
+        
+        # Génération du fichier de test
+        generate_fuzzing_test(ast, "FuzzContract")
     else:
         logging.error("Erreur : échec de la génération de l'AST.")
 
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    main(args.file, args.framework)
+    main(args.file, args.framework, args.lib)

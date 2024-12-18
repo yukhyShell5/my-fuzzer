@@ -7,6 +7,10 @@ fuzzer pour les smart contract solidity a base de l'[ast](https://en.wikipedia.o
 - Génération de l'AST d'un fichier Solidity spécifique ou de tous les fichiers Solidity dans un projet Foundry.
 - Sélection automatique de la version de Solidity basée sur les fichiers Solidity.
 
+## TODO
+- l'argument pour l'installation des import (--lib) a reparer. (ne prend pas bien l'arg et essayer d'installer tout le temps les imports)
+- améliorer la fonction pour generer la gen de fuzz pour foundry
+
 ## 📁 File Structure
 ```bash
 .
