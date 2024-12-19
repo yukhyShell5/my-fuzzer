@@ -1,4 +1,4 @@
-# my-fuzzer
+# Ram fuzzer
 fuzzer pour les smart contract solidity a base de l'[ast](https://en.wikipedia.org/wiki/Abstract_syntax_tree)
 
 ![belier](./img/belier.png "belier")
@@ -12,6 +12,7 @@ fuzzer pour les smart contract solidity a base de l'[ast](https://en.wikipedia.o
 ## TODO
 - l'argument pour l'installation des import (--lib) a reparer. (ne prend pas bien l'arg et essayer d'installer tout le temps les imports)
 - améliorer la fonction pour generer la gen de fuzz pour foundry
+- ajoute de multi worker pour un fuzzing plus rapide
 
 ## 📁 File Structure
 ```bash
