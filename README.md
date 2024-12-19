@@ -1,6 +1,8 @@
 # my-fuzzer
 fuzzer pour les smart contract solidity a base de l'[ast](https://en.wikipedia.org/wiki/Abstract_syntax_tree)
 
+![belier](./img/belier.png "belier")
+
 ## Fonctionnalités
 - Vérification de l'installation de solc et installation automatique via solc-select.
 - Détection des environnements Foundry et Hardhat.
