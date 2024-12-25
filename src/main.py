@@ -14,6 +14,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--file", type=str, help="Chemin vers le fichier Solidity.")
 parser.add_argument("--lib", type=str, help="Spécifie une bibliothèque à installer pour les imports.")
 parser.add_argument("--framework", type=str, choices=["foundry", "hardhat"], help="Spécifie le framework utilisé (foundry ou hardhat).")
+parser.add_argument("--debug", action="store_true", help="Active le mode de débogage.")
+parser.add_argument("--worker", action="store_true", help="nombre de processus de travailleurs")
 
 def is_solc_installed():
     try:
